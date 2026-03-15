@@ -46,141 +46,74 @@ async function sendTelegramMessage(
 /**
  * Transcribe voice message using Home Assistant's faster_whisper
  */
-async function transcribeVoiceMessage(
+
+/**
+ * Store voice message and signal host process for transcription
+ * Host process (outside container) handles HA STT and updates message
+ */
+async function storeVoiceForTranscription(
   bot: Bot,
   ctx: any,
   chatJid: string,
   messageId: string,
-): Promise<string | null> {
+): Promise<void> {
   try {
-    // Load HA configuration
-    const configPath = '/home/node/.claude/memory/config.json';
-    if (!fs.existsSync(configPath)) {
-      logger.debug('HA config not found, skipping voice transcription');
-      return null;
-    }
-
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const haUrl = config.homeassistant?.url;
-    const haToken = config.homeassistant?.token;
-
-    if (!haUrl || !haToken) {
-      logger.debug('HA credentials not configured');
-      return null;
-    }
-
-    // Download audio file from Telegram
     const fileId = ctx.message.voice?.file_id;
-    if (!fileId) return null;
+    if (!fileId) return;
 
-    let audioBuffer: Buffer | null = null;
-    try {
-      const file = await bot.api.getFile(fileId);
-      if (!file.file_path) return null;
+    // Download audio file
+    const file = await bot.api.getFile(fileId);
+    if (!file.file_path) return;
 
-      const fileUrl = `https://api.telegram.org/file/bot${bot.token}/${file.file_path}`;
-
-      audioBuffer = await new Promise((resolve) => {
-        const chunks: Buffer[] = [];
-        const req = https.get(fileUrl, { timeout: 30000 }, (res: any) => {
-          res.on('data', (chunk: Buffer) => chunks.push(chunk));
-          res.on('end', () => resolve(Buffer.concat(chunks)));
-        });
-        req.on('error', () => resolve(null));
-        req.on('timeout', () => {
-          req.destroy();
-          resolve(null);
-        });
+    const fileUrl = `https://api.telegram.org/file/bot${bot.token}/${file.file_path}`;
+    
+    const audioBuffer: Buffer | null = await new Promise((resolve) => {
+      const chunks: Buffer[] = [];
+      const req = https.get(fileUrl, { timeout: 30000 }, (res: any) => {
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
       });
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => { req.destroy(); resolve(null); });
+    });
 
-      if (!audioBuffer || audioBuffer.length === 0) {
-        logger.debug({ fileId }, 'Failed to download voice file');
-        return null;
-      }
-    } catch (err) {
-      logger.debug({ err }, 'Error downloading voice file');
-      return null;
+    if (!audioBuffer || audioBuffer.length === 0) {
+      logger.debug({ fileId }, 'Failed to download voice file');
+      return;
     }
 
-    // Transcribe using HA
-    try {
-      const boundary = '----B' + Date.now();
-      let body =
-        '--' +
-        boundary +
-        '\r\nContent-Disposition: form-data; name="file"; filename="voice.ogg"\r\nContent-Type: audio/ogg\r\n\r\n';
-
-      const formData = Buffer.concat([
-        Buffer.from(body),
-        audioBuffer,
-        Buffer.from('\r\n--' + boundary + '--\r\n'),
-      ]);
-
-      const transcription = await new Promise<string | null>((resolve) => {
-        let timeout: NodeJS.Timeout;
-        timeout = setTimeout(() => {
-          logger.debug('Voice transcription timeout');
-          resolve(null);
-        }, 30000);
-
-        const url = new URL(
-          '/api/services/stt/faster_whisper',
-          haUrl,
-        ).toString();
-
-        const req = https.request(
-          url,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: 'Bearer ' + haToken,
-              'Content-Type': `multipart/form-data; boundary=${boundary}`,
-              'Content-Length': formData.length,
-            },
-          },
-          (res: any) => {
-            let data = '';
-            res.on('data', (chunk: string) => (data += chunk));
-            res.on('end', () => {
-              clearTimeout(timeout);
-              try {
-                const json = JSON.parse(data);
-                const text = json.result?.[0]?.text || json.text || null;
-                if (text) {
-                  logger.info(
-                    { length: text.length },
-                    'Voice message transcribed',
-                  );
-                }
-                resolve(text);
-              } catch (e) {
-                logger.debug({ err: e }, 'HA response parse error');
-                resolve(null);
-              }
-            });
-          },
-        );
-
-        req.on('error', (err) => {
-          clearTimeout(timeout);
-          logger.debug({ err }, 'HA transcription request failed');
-          resolve(null);
-        });
-
-        req.write(formData);
-        req.end();
-      });
-
-      return transcription;
-    } catch (err) {
-      logger.debug({ err }, 'HA transcription failed');
-      return null;
+    // Save audio to /workspace/project/data/voice-transcriptions/
+    const fs = require('fs');
+    const path = require('path');
+    const voiceDir = '/workspace/project/data/voice-transcriptions';
+    
+    if (!fs.existsSync(voiceDir)) {
+      fs.mkdirSync(voiceDir, { recursive: true });
     }
+
+    const audioFile = path.join(voiceDir, `${messageId}.ogg`);
+    fs.writeFileSync(audioFile, audioBuffer);
+
+    // Write IPC signal for host process
+    const ipcDir = '/workspace/ipc/transcription';
+    if (!fs.existsSync(ipcDir)) {
+      fs.mkdirSync(ipcDir, { recursive: true });
+    }
+
+    const ipcFile = path.join(ipcDir, `${messageId}.json`);
+    fs.writeFileSync(ipcFile, JSON.stringify({
+      messageId,
+      chatJid,
+      audioFile,
+      timestamp: new Date().toISOString(),
+    }));
+
+    logger.info({ messageId, audioFile }, 'Voice message queued for host transcription');
   } catch (err) {
-    logger.debug({ err }, 'Voice transcription error');
-    return null;
+    logger.debug({ err }, 'Voice transcription queueing error');
   }
 }
+
 
 /**
  * Analyze image using Claude vision API
@@ -441,9 +374,9 @@ export class TelegramChannel implements Channel {
       // Store with placeholder initially
       storeNonText(ctx, '[Sprachnachricht wird transkribiert...]');
 
-      // Start async transcription (fire-and-forget)
+      // Queue for host process transcription
       if (this.bot) {
-        transcribeVoiceMessage(this.bot, ctx, chatJid, messageId)
+        storeVoiceForTranscription(this.bot, ctx, chatJid, messageId)
           .then((transcription) => {
             if (transcription) {
               // Import db module and update message

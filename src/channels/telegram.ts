@@ -43,7 +43,6 @@ async function sendTelegramMessage(
   }
 }
 
-
 /**
  * Transcribe voice message using Home Assistant's faster_whisper
  */
@@ -80,7 +79,7 @@ async function transcribeVoiceMessage(
       if (!file.file_path) return null;
 
       const fileUrl = `https://api.telegram.org/file/bot${bot.token}/${file.file_path}`;
-      
+
       audioBuffer = await new Promise((resolve) => {
         const chunks: Buffer[] = [];
         const req = https.get(fileUrl, { timeout: 30000 }, (res: any) => {
@@ -88,7 +87,10 @@ async function transcribeVoiceMessage(
           res.on('end', () => resolve(Buffer.concat(chunks)));
         });
         req.on('error', () => resolve(null));
-        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('timeout', () => {
+          req.destroy();
+          resolve(null);
+        });
       });
 
       if (!audioBuffer || audioBuffer.length === 0) {
@@ -180,13 +182,10 @@ async function transcribeVoiceMessage(
   }
 }
 
-
 /**
  * Analyze image using Claude vision API
  */
-async function analyzeImage(
-  imageUrl: string,
-): Promise<string | null> {
+async function analyzeImage(imageUrl: string): Promise<string | null> {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -403,17 +402,18 @@ export class TelegramChannel implements Channel {
       if (!group) return;
 
       const messageId = ctx.message.message_id.toString();
-      
+
       // Store placeholder
       storeNonText(ctx, '[Bild wird analysiert...]');
 
       // Analyze image async
       if (this.bot) {
         try {
-          const fileId = ctx.message.photo?.[ctx.message.photo.length - 1]?.file_id;
+          const fileId =
+            ctx.message.photo?.[ctx.message.photo.length - 1]?.file_id;
           const file = await this.bot.api.getFile(fileId);
           const imageUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
-          
+
           analyzeImage(imageUrl).then((description) => {
             if (description) {
               import('./db.js').then((dbModule) => {
@@ -485,7 +485,8 @@ export class TelegramChannel implements Channel {
 
       if (reactionEmoji) {
         const timestamp = new Date().toISOString();
-        const senderName = ctx.from?.first_name || ctx.from?.username || 'Unknown';
+        const senderName =
+          ctx.from?.first_name || ctx.from?.username || 'Unknown';
         const sender = ctx.from?.id?.toString() || '';
 
         // Semantic mapping of reactions
@@ -546,7 +547,11 @@ export class TelegramChannel implements Channel {
    * Send emoji reaction to a message
    * Usage: await channel.sendReaction('tg:-123456789', 123, '👍')
    */
-  async sendReaction(jid: string, messageId: number | string, emoji: string): Promise<void> {
+  async sendReaction(
+    jid: string,
+    messageId: number | string,
+    emoji: string,
+  ): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');
       return;
@@ -554,9 +559,12 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
-      const msgId = typeof messageId === 'string' ? parseInt(messageId) : messageId;
+      const msgId =
+        typeof messageId === 'string' ? parseInt(messageId) : messageId;
 
-      await this.bot.api.setMessageReaction(numericId, msgId, [{ type: 'emoji', emoji }]);
+      await this.bot.api.setMessageReaction(numericId, msgId, [
+        { type: 'emoji', emoji },
+      ]);
       logger.debug({ jid, messageId: msgId, emoji }, 'Reaction sent');
     } catch (err) {
       logger.debug({ jid, messageId, emoji, err }, 'Failed to send reaction');

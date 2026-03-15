@@ -1,4 +1,5 @@
 import https from 'https';
+import http from 'http';
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
@@ -128,10 +129,7 @@ async function transcribeVoiceMessage(
           haUrl,
         ).toString();
 
-        // Choose http or https based on haUrl
-        const HttpModule = haUrl.startsWith('https') ? require('https') : require('http');
-        
-        const req = HttpModule.request(
+        const req = https.request(
           url,
           {
             method: 'POST',

@@ -518,6 +518,27 @@ export class TelegramChannel implements Channel {
     });
   }
 
+  /**
+   * Send emoji reaction to a message
+   * Usage: await channel.sendReaction('tg:-123456789', 123, '👍')
+   */
+  async sendReaction(jid: string, messageId: number | string, emoji: string): Promise<void> {
+    if (!this.bot) {
+      logger.warn('Telegram bot not initialized');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      const msgId = typeof messageId === 'string' ? parseInt(messageId) : messageId;
+
+      await this.bot.api.setMessageReaction(numericId, msgId, [{ type: 'emoji', emoji }]);
+      logger.debug({ jid, messageId: msgId, emoji }, 'Reaction sent');
+    } catch (err) {
+      logger.debug({ jid, messageId, emoji, err }, 'Failed to send reaction');
+    }
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');

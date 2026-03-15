@@ -302,6 +302,20 @@ export function storeMessageDirect(msg: {
   );
 }
 
+
+/**
+ * Update message content (for transcribed voice messages)
+ */
+export function updateMessageContent(
+  id: string,
+  chatJid: string,
+  newContent: string,
+): void {
+  db.prepare(
+    `UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ?`,
+  ).run(newContent, id, chatJid);
+}
+
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,

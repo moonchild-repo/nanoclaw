@@ -473,7 +473,7 @@ export class TelegramChannel implements Channel {
     this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
 
-    // Handle message reactions
+    // Handle message reactions with semantic interpretation
     this.bot.on('message_reaction', (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
@@ -485,13 +485,37 @@ export class TelegramChannel implements Channel {
 
       if (reactionEmoji) {
         const timestamp = new Date().toISOString();
+        const senderName = ctx.from?.first_name || ctx.from?.username || 'Unknown';
+        const sender = ctx.from?.id?.toString() || '';
+
+        // Semantic mapping of reactions
+        const reactionMeaning: Record<string, string> = {
+          '👍': 'Zustimmung/Ja/Gut',
+          '👎': 'Ablehnung/Nein',
+          '❤️': 'Gefällt mir/Liebe',
+          '😂': 'Witzig/Lustig',
+          '😢': 'Traurig/Mitleid',
+          '🔥': 'Großartig/Heiß',
+          '🎉': 'Freude/Glückwunsch',
+        };
+
+        const meaning = reactionMeaning[reactionEmoji] || 'Reaktion';
+
         logger.debug(
-          { chatJid, messageId, reactions: reactionEmoji },
-          'Message reaction received',
+          { chatJid, messageId, emoji: reactionEmoji, meaning },
+          'Message reaction: ' + meaning,
         );
 
-        // Store reaction as metadata (future: use for sentiment analysis)
-        // For now, just log it
+        // Store reaction as pseudo-message so agent can see it
+        this.opts.onMessage(chatJid, {
+          id: `reaction_${messageId}_${Date.now()}`,
+          chat_jid: chatJid,
+          sender,
+          sender_name: senderName,
+          content: `[Hat mit ${reactionEmoji} (${meaning}) reagiert]`,
+          timestamp,
+          is_from_me: false,
+        });
       }
     });
 

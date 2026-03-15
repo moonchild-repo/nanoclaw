@@ -180,6 +180,65 @@ async function transcribeVoiceMessage(
   }
 }
 
+
+/**
+ * Analyze image using Claude vision API
+ */
+async function analyzeImage(
+  imageUrl: string,
+): Promise<string | null> {
+  try {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      logger.debug('ANTHROPIC_API_KEY not set, skipping image analysis');
+      return null;
+    }
+
+    // Use Claude API to analyze the image
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'url',
+                  url: imageUrl,
+                },
+              },
+              {
+                type: 'text',
+                text: 'Beschreibe dieses Bild kurz und prägnant in 1-2 Sätzen auf Deutsch.',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    const description = data.content?.[0]?.text;
+    if (description) {
+      logger.info({ length: description.length }, 'Image analyzed');
+      return description;
+    }
+    return null;
+  } catch (err) {
+    logger.debug({ err }, 'Image analysis failed');
+    return null;
+  }
+}
+
 export class TelegramChannel implements Channel {
   name = 'telegram';
 
@@ -338,7 +397,39 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const messageId = ctx.message.message_id.toString();
+      
+      // Store placeholder
+      storeNonText(ctx, '[Bild wird analysiert...]');
+
+      // Analyze image async
+      if (this.bot) {
+        try {
+          const fileId = ctx.message.photo?.[ctx.message.photo.length - 1]?.file_id;
+          const file = await this.bot.api.getFile(fileId);
+          const imageUrl = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
+          
+          analyzeImage(imageUrl).then((description) => {
+            if (description) {
+              import('./db.js').then((dbModule) => {
+                (dbModule as any).updateMessageContent(
+                  messageId,
+                  chatJid,
+                  description,
+                );
+              });
+            }
+          });
+        } catch (err) {
+          logger.debug({ err }, 'Image download failed');
+        }
+      }
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
@@ -381,6 +472,28 @@ export class TelegramChannel implements Channel {
     });
     this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
+
+    // Handle message reactions
+    this.bot.on('message_reaction', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const reactions = ctx.messageReaction.new_reaction || [];
+      const reactionEmoji = reactions.map((r) => r.emoji || '').join('');
+      const messageId = ctx.messageReaction.message_id.toString();
+
+      if (reactionEmoji) {
+        const timestamp = new Date().toISOString();
+        logger.debug(
+          { chatJid, messageId, reactions: reactionEmoji },
+          'Message reaction received',
+        );
+
+        // Store reaction as metadata (future: use for sentiment analysis)
+        // For now, just log it
+      }
+    });
 
     // Handle errors gracefully
     this.bot.catch((err) => {

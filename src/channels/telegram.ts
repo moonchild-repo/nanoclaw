@@ -1,5 +1,4 @@
 import https from 'https';
-import http from 'http';
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
